@@ -25,19 +25,24 @@ func main() {
 	http.HandleFunc("/getPods", getPods)
 	http.HandleFunc("/getPodStatus", getPodStatus)
 	http.HandleFunc("/createPod", createPod)
+	http.HandleFunc("/updatePod", updatePod)
+	http.HandleFunc("/deletePod", deletePod)
 
 	http.ListenAndServe(":3000", nil)
 }
 func buildKeyFromNames(namespace string, name string) string {
 	return fmt.Sprintf("%s-%s", namespace, name)
 }
-func addCorsHeaders(w *http.ResponseWriter) {
+func addCorsHeaders(w *http.ResponseWriter, r *http.Request) bool {
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")
 	(*w).Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+	return r.Method == "OPTIONS"
 }
 func getCapacity(w http.ResponseWriter, r *http.Request) {
 	log.Printf("getCapacity")
-	addCorsHeaders(&w)
+	if addCorsHeaders(&w, r) {
+		return
+	}
 	capacity := v1.ResourceList{
 		"cpu":    resource.MustParse("20"),
 		"memory": resource.MustParse("100Gi"),
@@ -48,14 +53,18 @@ func getCapacity(w http.ResponseWriter, r *http.Request) {
 }
 func getNodeAddresses(w http.ResponseWriter, r *http.Request) {
 	log.Printf("getNodeAddresses")
-	addCorsHeaders(&w)
+	if addCorsHeaders(&w, r) {
+		return
+	}
 	nodeAddresses := []v1.NodeAddress{}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(nodeAddresses)
 }
 func getNodeConditions(w http.ResponseWriter, r *http.Request) {
 	log.Printf("getNodeConditions")
-	addCorsHeaders(&w)
+	if addCorsHeaders(&w, r) {
+		return
+	}
 	nodeConditions := []v1.NodeCondition{
 		{
 			Type:               "Ready",
@@ -71,7 +80,7 @@ func getNodeConditions(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPods(w http.ResponseWriter, r *http.Request) {
-	log.Printf("getPods")
+	log.Printf("getPods - %s", r.Method)
 	if addCorsHeaders(&w, r) {
 		return
 	}
@@ -88,7 +97,9 @@ func getPodStatus(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	name := r.URL.Query().Get("name")
 	log.Printf("getPodStatus %s - %s", namespace, name)
-	addCorsHeaders(&w)
+	if addCorsHeaders(&w, r) {
+		return
+	}
 
 	key := buildKeyFromNames(namespace, name)
 	pod := pods[key]
@@ -103,7 +114,9 @@ func getPodStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func createPod(w http.ResponseWriter, r *http.Request) {
-	addCorsHeaders(&w)
+	if addCorsHeaders(&w, r) {
+		return
+	}
 	var pod v1.Pod
 	err := json.NewDecoder(r.Body).Decode(&pod)
 	if err != nil {
@@ -147,4 +160,34 @@ func createPod(w http.ResponseWriter, r *http.Request) {
 
 	key := buildKeyFromNames(pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 	pods[key] = &pod
+}
+func updatePod(w http.ResponseWriter, r *http.Request) {
+	if addCorsHeaders(&w, r) {
+		return
+	}
+	var pod v1.Pod
+	err := json.NewDecoder(r.Body).Decode(&pod)
+	if err != nil {
+		log.Printf("Error in updatePod: %s", err)
+		http.Error(w, err.Error(), 400)
+	}
+	log.Printf("updatePod %s - %s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+
+	key := buildKeyFromNames(pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+	pods[key] = &pod
+}
+func deletePod(w http.ResponseWriter, r *http.Request) {
+	if addCorsHeaders(&w, r) {
+		return
+	}
+	var pod v1.Pod
+	err := json.NewDecoder(r.Body).Decode(&pod)
+	if err != nil {
+		log.Printf("Error in deletePod: %s", err)
+		http.Error(w, err.Error(), 400)
+	}
+	log.Printf("deletePod %s - %s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+
+	key := buildKeyFromNames(pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+	delete(pods, key)
 }
