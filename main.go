@@ -2,7 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
+	"time"
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -14,14 +17,27 @@ var pods map[string]*v1.Pod
 func main() {
 	pods = make(map[string]*v1.Pod)
 
+	// TODO - add filtering on HTTP Method type
+	// TODO - error handling (checking missing query params, missing body, ...)
 	http.HandleFunc("/capacity", getCapacity)
 	http.HandleFunc("/nodeAddresses", getNodeAddresses)
 	http.HandleFunc("/nodeConditions", getNodeConditions)
 	http.HandleFunc("/getPods", getPods)
+	http.HandleFunc("/getPodStatus", getPodStatus)
+	http.HandleFunc("/createPod", createPod)
 
 	http.ListenAndServe(":3000", nil)
 }
+func buildKeyFromNames(namespace string, name string) string {
+	return fmt.Sprintf("%s-%s", namespace, name)
+}
+func addCorsHeaders(w *http.ResponseWriter) {
+	(*w).Header().Set("Access-Control-Allow-Origin", "*")
+	(*w).Header().Set("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+}
 func getCapacity(w http.ResponseWriter, r *http.Request) {
+	log.Printf("getCapacity")
+	addCorsHeaders(&w)
 	capacity := v1.ResourceList{
 		"cpu":    resource.MustParse("20"),
 		"memory": resource.MustParse("100Gi"),
@@ -31,11 +47,15 @@ func getCapacity(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(capacity)
 }
 func getNodeAddresses(w http.ResponseWriter, r *http.Request) {
+	log.Printf("getNodeAddresses")
+	addCorsHeaders(&w)
 	nodeAddresses := []v1.NodeAddress{}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(nodeAddresses)
 }
 func getNodeConditions(w http.ResponseWriter, r *http.Request) {
+	log.Printf("getNodeConditions")
+	addCorsHeaders(&w)
 	nodeConditions := []v1.NodeCondition{
 		{
 			Type:               "Ready",
@@ -51,6 +71,10 @@ func getNodeConditions(w http.ResponseWriter, r *http.Request) {
 }
 
 func getPods(w http.ResponseWriter, r *http.Request) {
+	log.Printf("getPods")
+	if addCorsHeaders(&w, r) {
+		return
+	}
 	podList := []*v1.Pod{}
 	for _, pod := range pods {
 		podList = append(podList, pod)
@@ -58,4 +82,69 @@ func getPods(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(podList)
+}
+
+func getPodStatus(w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	name := r.URL.Query().Get("name")
+	log.Printf("getPodStatus %s - %s", namespace, name)
+	addCorsHeaders(&w)
+
+	key := buildKeyFromNames(namespace, name)
+	pod := pods[key]
+	if pod == nil {
+		log.Printf("getPodStatus. Pod not found: %s - %s", namespace, name)
+		w.WriteHeader(404)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(pod.Status)
+}
+
+func createPod(w http.ResponseWriter, r *http.Request) {
+	addCorsHeaders(&w)
+	var pod v1.Pod
+	err := json.NewDecoder(r.Body).Decode(&pod)
+	if err != nil {
+		log.Printf("Error in createPod: %s", err)
+		http.Error(w, err.Error(), 400)
+	}
+	log.Printf("createPod %s - %s", pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+
+	pod.Status.Phase = v1.PodRunning
+	pod.Status.Conditions = []v1.PodCondition{
+		v1.PodCondition{
+			Type:   v1.PodScheduled,
+			Status: v1.ConditionTrue,
+		},
+		v1.PodCondition{
+			Type:   v1.PodInitialized,
+			Status: v1.ConditionTrue,
+		},
+		v1.PodCondition{
+			Type:   v1.PodReady,
+			Status: v1.ConditionTrue,
+		},
+	}
+
+	now := metav1.NewTime(time.Now())
+
+	for _, container := range pod.Spec.Containers {
+		status := v1.ContainerStatus{
+			Name:         container.Name,
+			Image:        container.Image,
+			Ready:        true,
+			RestartCount: 0,
+			State: v1.ContainerState{
+				Running: &v1.ContainerStateRunning{
+					StartedAt: now,
+				},
+			},
+		}
+		pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, status)
+	}
+
+	key := buildKeyFromNames(pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
+	pods[key] = &pod
 }
