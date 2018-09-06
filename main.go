@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"k8s.io/api/core/v1"
@@ -27,6 +29,7 @@ func main() {
 	http.HandleFunc("/createPod", createPod)
 	http.HandleFunc("/updatePod", updatePod)
 	http.HandleFunc("/deletePod", deletePod)
+	http.HandleFunc("/getContainerLogs", getContainerLogs)
 
 	http.ListenAndServe(":3000", nil)
 }
@@ -57,6 +60,14 @@ func getNodeAddresses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	nodeAddresses := []v1.NodeAddress{}
+	kubeletPodIP := os.Getenv("VKUBELET_POD_IP")
+	if kubeletPodIP != "" {
+		nodeAddress := v1.NodeAddress{
+			Address: kubeletPodIP,
+			Type:    v1.NodeInternalIP,
+		}
+		nodeAddresses = append(nodeAddresses, nodeAddress)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(nodeAddresses)
 }
@@ -190,4 +201,31 @@ func deletePod(w http.ResponseWriter, r *http.Request) {
 
 	key := buildKeyFromNames(pod.ObjectMeta.Namespace, pod.ObjectMeta.Name)
 	delete(pods, key)
+}
+func getContainerLogs(w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	podName := r.URL.Query().Get("podName")
+	containerName := r.URL.Query().Get("containerName")
+	log.Printf("getPodStatus %s - %s", namespace, podName)
+	if addCorsHeaders(&w, r) {
+		return
+	}
+
+	key := buildKeyFromNames(namespace, podName)
+	pod := pods[key]
+	if pod == nil {
+		log.Printf("getContainerLogs. Pod not found: %s - %s", namespace, podName)
+		w.WriteHeader(404)
+		return
+	}
+
+	for _, container := range pod.Spec.Containers {
+		if container.Name == containerName {
+			io.WriteString(w, fmt.Sprintf("Simulated log content for %s, %s, %s\nIf this provider actually ran the containers then the logs would appear here ;-)\n", namespace, podName, containerName))
+			return
+		}
+	}
+
+	log.Printf("getContainerLogs. Container not found: %s - %s - %s", namespace, podName, containerName)
+	w.WriteHeader(404)
 }
